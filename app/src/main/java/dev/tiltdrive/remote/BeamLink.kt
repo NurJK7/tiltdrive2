@@ -27,6 +27,8 @@ import java.nio.ByteBuffer
 
 enum class LinkState { Idle, Searching, Connected, Failed }
 
+const val ERR_NOT_FOUND = "not_found"
+
 /**
  * UDP link to the game.
  * 1. Pairing: broadcast "beamng|<device>|<code>" to :4444. The game answers "beamng|<code>" to :4445
@@ -47,6 +49,8 @@ class BeamLink(private val ctx: Context) {
     val stale = MutableStateFlow(false)
     /** Diagnostics for the dashboard: what arrives on :4445. */
     val rxInfo = MutableStateFlow("")
+    /** True when this phone is only a display (no pairing, no control packets). */
+    val viewOnly = MutableStateFlow(false)
     @Volatile var onCodeFound: ((String) -> Unit)? = null
 
     /** Live control values, written by the UI, read by the sender loop. */
@@ -61,6 +65,7 @@ class BeamLink(private val ctx: Context) {
         telemetry.value = null
         stale.value = false
         rxInfo.value = ""
+        viewOnly.value = false
         progress.value = 0f
         state.value = LinkState.Searching
         job = scope.launch {
@@ -75,7 +80,43 @@ class BeamLink(private val ctx: Context) {
         rx = null
         throttle = 0f
         brake = 0f
+        viewOnly.value = false
         state.value = LinkState.Idle
+    }
+
+    /** Dashboard-only mode: just listen for the game's OutGauge stream, no pairing needed. */
+    fun listenOnly() {
+        disconnect()
+        error.value = null
+        telemetry.value = null
+        stale.value = false
+        rxInfo.value = ""
+        viewOnly.value = true
+        state.value = LinkState.Connected
+        job = scope.launch {
+            var sock: DatagramSocket? = null
+            try {
+                val s = DatagramSocket(null).apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress(PORT_LOCAL))
+                    soTimeout = 250
+                }
+                sock = s
+                rx = s
+                pin(wifiNetwork(), s)
+                receiveLoop(s)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (isActive) {
+                    error.value = e.message ?: e.toString()
+                    viewOnly.value = false
+                    state.value = LinkState.Failed
+                }
+            } finally {
+                sock?.close()
+            }
+        }
     }
 
     // ───────────── Wi-Fi helpers ─────────────
@@ -145,8 +186,7 @@ class BeamLink(private val ctx: Context) {
             }
             if (found == null) {
                 if (isActive) {
-                    error.value = "Game not found. Same Wi-Fi? In the game set Options → Controls → Hardware → " +
-                        "“Use your phone or tablet” to Yes, and allow BeamNG.drive in the Windows firewall."
+                    error.value = ERR_NOT_FOUND
                     state.value = LinkState.Failed
                 }
                 return@coroutineScope

@@ -28,5 +28,11 @@ Build -> Build APK(s) -> app/build/outputs/apk/debug/app-debug.apk, send the fil
 
 ## Controls
 - Steering: Tilt (gyro), Wheel (turn the on-screen wheel with a finger), Arrows (hold left/right). Tap the mode name in the top bar to switch.
-- Gas: Settings -> Gas limit (max power) and Gas ramp-up (smooth press). "Gas in game" in the dashboard shows what the game really received.
-- Dashboard diagnostics: with no data the top of the drive screen shows what arrives on UDP :4445.
+- Pedals are on/off (the game ignores partial gas/brake values).
+- Language: English / Russian (flags on the connect screen and in Settings).
+
+## Dashboard
+- Four styles: M Sport, Race, EV, Classic. Tap the dashboard while driving to switch, or pick in Settings.
+- Warnings: shift light at the redline, low fuel, overheating, plus turn signals, high beam, ABS, TC, handbrake, oil, battery.
+- "Dash" button: full-screen dashboard. "Dashboard only" on the connect screen turns the phone into a display with no pairing.
+- With no data the top of the screen shows what arrives on UDP :4445.

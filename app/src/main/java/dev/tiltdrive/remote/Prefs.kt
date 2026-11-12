@@ -9,16 +9,14 @@ import androidx.lifecycle.AndroidViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 
 data class Settings(
-    val range: Float = 70f,       // degrees of tilt for full lock
+    val range: Float = 70f,       // degrees for full lock (tilt and on-screen wheel)
     val deadzone: Float = 3f,     // percent
-    val invert: Boolean = false,
-    val analog: Boolean = false,  // pedals: slide up/down to modulate
-    val haptics: Boolean = true,
+    val invert: Boolean = false,  // one switch, same meaning in every steering mode
     val mph: Boolean = false,
     val steerMode: Int = 0,       // 0 tilt, 1 on-screen wheel, 2 arrows
     val smoothing: Float = 40f,   // percent, tilt steering
-    val gasLimit: Float = 100f,   // percent, max throttle when the pedal is pressed
-    val gasRampMs: Float = 0f,    // time to reach the limit, 0 = instant
+    val dashStyle: Int = 0,       // see DASH_STYLES
+    val lang: String = "en",
 )
 
 class Prefs(ctx: Context) {
@@ -30,25 +28,24 @@ class Prefs(ctx: Context) {
         get() = sp.getString("host", "") ?: ""
         set(v) = sp.edit().putString("host", v).apply()
 
+    // "invert2": the tilt direction was fixed, so the old "invert" value no longer applies.
     fun load() = Settings(
         range = sp.getFloat("range", 70f),
         deadzone = sp.getFloat("deadzone", 3f),
-        invert = sp.getBoolean("invert", false),
-        analog = sp.getBoolean("analog", false),
-        haptics = sp.getBoolean("haptics", true),
+        invert = sp.getBoolean("invert2", false),
         mph = sp.getBoolean("mph", false),
         steerMode = sp.getInt("steerMode", 0),
         smoothing = sp.getFloat("smoothing", 40f),
-        gasLimit = sp.getFloat("gasLimit", 100f),
-        gasRampMs = sp.getFloat("gasRampMs", 0f),
+        dashStyle = sp.getInt("dashStyle", 0),
+        lang = sp.getString("lang", null)
+            ?: if (java.util.Locale.getDefault().language == "ru") "ru" else "en",
     )
 
     fun save(s: Settings) = sp.edit()
         .putFloat("range", s.range).putFloat("deadzone", s.deadzone)
-        .putBoolean("invert", s.invert).putBoolean("analog", s.analog)
-        .putBoolean("haptics", s.haptics).putBoolean("mph", s.mph)
+        .putBoolean("invert2", s.invert).putBoolean("mph", s.mph)
         .putInt("steerMode", s.steerMode).putFloat("smoothing", s.smoothing)
-        .putFloat("gasLimit", s.gasLimit).putFloat("gasRampMs", s.gasRampMs)
+        .putInt("dashStyle", s.dashStyle).putString("lang", s.lang)
         .apply()
 }
 

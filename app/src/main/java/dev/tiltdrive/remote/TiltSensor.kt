@@ -45,9 +45,9 @@ class TiltSensor(ctx: Context, private val rotation: () -> Int) : SensorEventLis
         }
         // Screen-horizontal component of "up" for the current display rotation.
         val sx = when (rotation()) {
-            Surface.ROTATION_90 -> uy
+            Surface.ROTATION_90 -> -uy   // screen right = -y of the device
             Surface.ROTATION_180 -> -ux
-            Surface.ROTATION_270 -> -uy
+            Surface.ROTATION_270 -> uy   // screen right = +y of the device
             else -> ux
         }
         angleDeg = Math.toDegrees(asin((-sx).coerceIn(-1f, 1f).toDouble())).toFloat()

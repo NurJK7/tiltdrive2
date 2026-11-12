@@ -3,12 +3,16 @@ package dev.tiltdrive.remote
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -22,25 +26,25 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -51,57 +55,60 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.min
 import kotlin.math.pow
-import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sign
 
-private val Bg = Color(0xFF0A0E14)
-private val Panel = Color(0xFF131A24)
-private val Line = Color(0xFF223044)
-private val Accent = Color(0xFFFF7A1A)
-private val Gas = Color(0xFF1FD6A0)
-private val BrakeCol = Color(0xFFFF4D5A)
-private val Dim = Color(0xFF7C8A9E)
-
-@Composable
-fun AppTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Accent, onPrimary = Color.Black,
-            background = Bg, surface = Panel, onSurface = Color.White, onBackground = Color.White,
-        ),
-        content = content,
-    )
-}
+private val STEER_MODES = listOf("Tilt", "Wheel", "Arrows")
 
 @Composable
 fun App(vm: DriveViewModel) {
     val state by vm.link.state.collectAsStateWithLifecycle()
-    Surface(Modifier.fillMaxSize(), color = Bg, contentColor = Color.White) {
-        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
-            if (state == LinkState.Connected) DriveScreen(vm) else ConnectScreen(vm)
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    CompositionLocalProvider(LocalLang provides settings.lang) {
+        Surface(Modifier.fillMaxSize(), color = Bg, contentColor = Color.White) {
+            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                if (state == LinkState.Connected) DriveScreen(vm) else ConnectScreen(vm)
+            }
+        }
+    }
+}
+
+@Composable
+fun LangChips(lang: String, modifier: Modifier = Modifier, onPick: (String) -> Unit) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("en" to "🇬🇧 EN", "ru" to "🇷🇺 RU").forEach { (code, label) ->
+            val sel = code == lang
+            val shape = RoundedCornerShape(8.dp)
+            Box(
+                Modifier.clip(shape)
+                    .background(if (sel) Accent else Panel)
+                    .border(1.dp, if (sel) Accent else Line, shape)
+                    .clickable { onPick(code) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Text(label, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (sel) Color.Black else Color.White)
+            }
         }
     }
 }
@@ -113,74 +120,98 @@ fun ConnectScreen(vm: DriveViewModel) {
     val state by vm.link.state.collectAsStateWithLifecycle()
     val error by vm.link.error.collectAsStateWithLifecycle()
     val progress by vm.link.progress.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val searching = state == LinkState.Searching
     val phoneIp = remember { vm.link.phoneIp() }
 
-    Row(
-        Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(32.dp),
-    ) {
-        Column(
-            Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.Center,
+    Box(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxSize().padding(start = 28.dp, end = 28.dp, top = 44.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(32.dp),
         ) {
-            Wheel(angle = -18f, modifier = Modifier.size(72.dp))
-            Spacer(Modifier.height(8.dp))
-            Text("TiltDrive", fontSize = 34.sp, fontWeight = FontWeight.Black)
-            Text("Use your phone as a steering wheel", color = Dim, fontSize = 14.sp)
-            Spacer(Modifier.height(14.dp))
-            Step("1", "Phone and PC on the same Wi-Fi")
-            Step("2", "In the game: Options → Controls → Hardware → “Use your phone or tablet” = Yes")
-            Step("3", "Tap AUTO-CONNECT. Tilt to steer, right half = gas, left half = brake")
-            Spacer(Modifier.height(14.dp))
-            Text("Dashboard (optional)", color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text(
-                "In the game: Options → Advanced → Protocols → OutGauge. Address ${phoneIp ?: "(join the Wi-Fi first)"}, " +
-                    "port 4445, rate 60. Then reload the car (Ctrl+R).",
-                color = Color(0xFFC5CEDB), fontSize = 13.sp,
-            )
-        }
-        Column(
-            Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Button(
-                onClick = { vm.autoConnect() }, enabled = !searching,
-                modifier = Modifier.fillMaxWidth().height(60.dp),
-                shape = RoundedCornerShape(16.dp),
-            ) { Text("AUTO-CONNECT", fontSize = 18.sp, fontWeight = FontWeight.Black) }
-            Spacer(Modifier.height(10.dp))
-            if (searching) {
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Looking for the game… ${(progress * 100).roundToInt()}%", color = Dim, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { vm.link.disconnect() }) { Text("Cancel") }
-                }
-            } else if (state == LinkState.Failed && error != null) {
-                Text(error ?: "", color = BrakeCol, fontSize = 13.sp)
+            Column(
+                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Wheel(angle = -18f, modifier = Modifier.size(72.dp))
+                Spacer(Modifier.height(8.dp))
+                Text("TiltDrive", fontSize = 34.sp, fontWeight = FontWeight.Black)
+                Text(tr("Use your phone as a steering wheel"), color = Dim, fontSize = 14.sp)
+                Spacer(Modifier.height(14.dp))
+                Step("1", tr("Phone and PC on the same Wi-Fi"))
+                Step("2", tr("In the game: Options → Controls → Hardware → “Use your phone or tablet” = Yes"))
+                Step("3", tr("Tap AUTO-CONNECT. Tilt to steer, right half = gas, left half = brake"))
+                Spacer(Modifier.height(14.dp))
+                Text(tr("Dashboard (optional)"), color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    tr(
+                        "In the game: Options → Advanced → Protocols → OutGauge. Address {0}, port 4445, rate 60. Then reload the car (Ctrl+R).",
+                        phoneIp ?: tr("(join the Wi-Fi first)"),
+                    ),
+                    color = Color(0xFFC5CEDB), fontSize = 13.sp,
+                )
             }
-            Spacer(Modifier.height(14.dp))
-            Text("Know the 5-digit code? Connect with it", color = Dim, fontSize = 13.sp)
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = vm.code, onValueChange = { vm.code = it.filter(Char::isDigit).take(5) }, singleLine = true,
-                label = { Text("Code") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(6.dp))
-            OutlinedTextField(
-                value = vm.host, onValueChange = { vm.host = it }, singleLine = true,
-                label = { Text("PC IP address (optional)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(
-                onClick = { vm.connectManual() }, enabled = !searching && vm.code.length == 5,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Connect") }
+            Column(
+                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Button(
+                    onClick = { vm.autoConnect() }, enabled = !searching,
+                    modifier = Modifier.fillMaxWidth().height(60.dp),
+                    shape = RoundedCornerShape(16.dp),
+                ) { Text(tr("AUTO-CONNECT"), fontSize = 18.sp, fontWeight = FontWeight.Black) }
+                Spacer(Modifier.height(10.dp))
+                if (searching) {
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            tr("Looking for the game… {0}%", (progress * 100).roundToInt()),
+                            color = Dim, fontSize = 13.sp, modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.link.disconnect() }) { Text(tr("Cancel")) }
+                    }
+                } else if (state == LinkState.Failed && error != null) {
+                    val e = error ?: ""
+                    Text(
+                        if (e == ERR_NOT_FOUND) {
+                            tr("Game not found. Same Wi-Fi? In the game set Options → Controls → Hardware → “Use your phone or tablet” to Yes, and allow BeamNG.drive in the Windows firewall.")
+                        } else e,
+                        color = BrakeCol, fontSize = 13.sp,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { vm.link.listenOnly() }, enabled = !searching,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(tr("Dashboard only")) }
+                Text(tr("Use this phone as a display, no pairing needed"), color = Dim, fontSize = 11.sp)
+                Spacer(Modifier.height(14.dp))
+                Text(tr("Know the 5-digit code? Connect with it"), color = Dim, fontSize = 13.sp)
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = vm.code, onValueChange = { vm.code = it.filter(Char::isDigit).take(5) }, singleLine = true,
+                    label = { Text(tr("Code")) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = vm.host, onValueChange = { vm.host = it }, singleLine = true,
+                    label = { Text(tr("PC IP address (optional)")) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { vm.connectManual() }, enabled = !searching && vm.code.length == 5,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(tr("Connect")) }
+            }
         }
+        LangChips(
+            settings.lang,
+            Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 12.dp),
+        ) { vm.update(settings.copy(lang = it)) }
     }
 }
 
@@ -198,7 +229,11 @@ private fun Step(n: String, text: String) {
 
 // ───────────────────────────── Drive screen ─────────────────────────────
 
-private val STEER_MODES = listOf("Tilt", "Wheel", "Arrows")
+@Composable
+private fun noDataHint(rxInfo: String): String =
+    if (rxInfo.isBlank()) {
+        tr("Nothing received on :4445. In the game set OutGauge to this phone's IP, port 4445, then Ctrl+R.")
+    } else tr("{0} · data not recognised", rxInfo)
 
 @Composable
 fun DriveScreen(vm: DriveViewModel) {
@@ -209,6 +244,7 @@ fun DriveScreen(vm: DriveViewModel) {
     val tel by link.telemetry.collectAsStateWithLifecycle()
     val stale by link.stale.collectAsStateWithLifecycle()
     val rxInfo by link.rxInfo.collectAsStateWithLifecycle()
+    val viewOnly by link.viewOnly.collectAsStateWithLifecycle()
 
     val tilt = remember {
         TiltSensor(ctx) { view.display?.rotation ?: android.view.Surface.ROTATION_90 }
@@ -222,24 +258,34 @@ fun DriveScreen(vm: DriveViewModel) {
         }
     }
 
+    var dashToggle by remember { mutableStateOf(false) }
+    val dashOnly = viewOnly || dashToggle
+    val dashNow by rememberUpdatedState(dashOnly)
+
     var trim by remember { mutableFloatStateOf(0f) }
     var wheelDeg by remember { mutableFloatStateOf(0f) }
     var showSettings by remember { mutableStateOf(false) }
     val cfg by rememberUpdatedState(settings)
 
-    var gasTarget by remember { mutableFloatStateOf(0f) }
-    var brakeTarget by remember { mutableFloatStateOf(0f) }
+    var gasDown by remember { mutableStateOf(false) }
+    var brakeDown by remember { mutableStateOf(false) }
     var dragDeg by remember { mutableFloatStateOf(0f) }
     var touching by remember { mutableStateOf(false) }
     var arrowL by remember { mutableStateOf(false) }
     var arrowR by remember { mutableStateOf(false) }
 
-    // One control loop (~60 Hz): steering from the chosen mode, throttle with limit and ramp.
+    // One control loop (~60 Hz): steering from the chosen mode, pedals on/off.
     LaunchedEffect(tilt) {
         var smooth = 0f
         var arrowVal = 0f
-        var gas = 0f
         while (isActive) {
+            if (dashNow) {
+                link.steerWire = 0.5f
+                link.throttle = 0f
+                link.brake = 0f
+                delay(50)
+                continue
+            }
             val s = cfg
             val steer: Float = when (s.steerMode) {
                 1 -> {
@@ -266,103 +312,157 @@ fun DriveScreen(vm: DriveViewModel) {
             val right = if (s.invert) -steer else steer      // +1 = full right
             link.steerWire = 0.5f - 0.5f * right             // wire: 0 = right, 1 = left, 0.5 = straight
             wheelDeg = steer * s.range
-
-            val limit = s.gasLimit / 100f
-            val target = gasTarget * limit
-            gas = if (s.gasRampMs <= 0f || target <= gas) target
-            else min(target, gas + limit * 16f / s.gasRampMs)
-            link.throttle = gas
-            link.brake = brakeTarget
+            link.throttle = if (gasDown) 1f else 0f
+            link.brake = if (brakeDown) 1f else 0f
             delay(16)
         }
     }
 
-    val wheelSize = if (settings.steerMode == 1) 175.dp else 150.dp
-    val wheelTouch = if (settings.steerMode == 1) {
-        Modifier.pointerInput(Unit) {
-            awaitEachGesture {
-                val down = awaitFirstDown()
-                val c = Offset(size.width / 2f, size.height / 2f)
-                fun ang(p: Offset) = Math.toDegrees(atan2((p.y - c.y).toDouble(), (p.x - c.x).toDouble())).toFloat()
-                var prev = ang(down.position)
-                var total = 0f
-                touching = true
-                dragDeg = 0f
-                var tracking = true
-                while (tracking) {
-                    val ev = awaitPointerEvent()
-                    val ch = ev.changes.firstOrNull { it.id == down.id }
-                    if (ch == null || !ch.pressed) {
-                        tracking = false
-                    } else {
-                        val a = ang(ch.position)
-                        var d = a - prev
-                        if (d > 180f) d -= 360f
-                        if (d < -180f) d += 360f
-                        total += d
-                        prev = a
-                        dragDeg = total
-                        ch.consume()
-                    }
-                }
-                touching = false
-            }
-        }
-    } else Modifier
+    val cycleStyle = { vm.update(settings.copy(dashStyle = (settings.dashStyle + 1) % DASH_STYLES.size)) }
+    val dashTap = Modifier.clickable(
+        interactionSource = remember { MutableInteractionSource() }, indication = null,
+    ) { cycleStyle() }
 
-    Row(Modifier.fillMaxSize().padding(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Pedal("BRAKE", BrakeCol, settings.analog, settings.haptics, Modifier.weight(0.85f).fillMaxHeight()) {
-            brakeTarget = it
-        }
-        Column(Modifier.weight(2.3f).fillMaxHeight()) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                val (txt, col) = when {
-                    tel == null -> "Connected · no dashboard data" to Accent
-                    stale -> "No telemetry from the game" to Accent
-                    else -> "Connected" to Gas
-                }
-                Text(
-                    txt, color = col, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { vm.update(settings.copy(steerMode = (settings.steerMode + 1) % 3)) }) {
-                    Text(STEER_MODES[settings.steerMode])
-                }
-                if (settings.steerMode == 0) {
-                    TextButton(onClick = { trim = tilt.angleDeg }) { Text("Center") }
-                }
-                TextButton(onClick = { showSettings = true }) { Text("Settings") }
-                TextButton(onClick = { link.disconnect() }) { Text("Exit", color = BrakeCol) }
+    if (dashOnly) {
+        Box(Modifier.fillMaxSize()) {
+            Dashboard(
+                tel, settings.dashStyle, settings.mph,
+                Modifier.fillMaxSize().padding(top = 40.dp, bottom = 4.dp).then(dashTap),
+            )
+            Row(Modifier.align(Alignment.TopEnd), verticalAlignment = Alignment.CenterVertically) {
+                if (!viewOnly) TextButton(onClick = { dashToggle = false }) { Text(tr("Controls")) }
+                TextButton(onClick = { showSettings = true }) { Text(tr("Settings")) }
+                TextButton(onClick = { link.disconnect() }) { Text(tr("Exit"), color = BrakeCol) }
             }
             if (tel == null) {
                 Text(
-                    if (rxInfo.isBlank()) "Nothing received on :4445. In the game set OutGauge to this phone's IP, port 4445, then Ctrl+R."
-                    else "$rxInfo · data not recognised",
-                    color = Dim, fontSize = 11.sp,
+                    noDataHint(rxInfo), color = Dim, fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.TopStart).padding(top = 10.dp, start = 12.dp, end = 220.dp),
                 )
             }
-            Row(
-                Modifier.weight(1f).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
-                Wheel(angle = wheelDeg, modifier = Modifier.size(wheelSize).then(wheelTouch))
-                Hud(tel, settings.mph)
-            }
-            if (settings.steerMode == 2) {
-                Row(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    HoldButton("◀", Modifier.weight(1f).fillMaxHeight()) { arrowL = it }
-                    HoldButton("▶", Modifier.weight(1f).fillMaxHeight()) { arrowR = it }
+        }
+    } else {
+        val wheelSize = if (settings.steerMode == 1) 175.dp else 140.dp
+        val wheelTouch = if (settings.steerMode == 1) {
+            Modifier.pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val c = Offset(size.width / 2f, size.height / 2f)
+                    fun ang(p: Offset) = Math.toDegrees(atan2((p.y - c.y).toDouble(), (p.x - c.x).toDouble())).toFloat()
+                    var prev = ang(down.position)
+                    var total = 0f
+                    touching = true
+                    dragDeg = 0f
+                    var tracking = true
+                    while (tracking) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull { it.id == down.id }
+                        if (ch == null || !ch.pressed) {
+                            tracking = false
+                        } else {
+                            val a = ang(ch.position)
+                            var d = a - prev
+                            if (d > 180f) d -= 360f
+                            if (d < -180f) d += 360f
+                            total += d
+                            prev = a
+                            dragDeg = total
+                            ch.consume()
+                        }
+                    }
+                    touching = false
                 }
             }
-        }
-        Pedal("GAS", Gas, settings.analog, settings.haptics, Modifier.weight(0.85f).fillMaxHeight()) {
-            gasTarget = it
+        } else Modifier
+
+        Row(Modifier.fillMaxSize().padding(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Pedal(tr("BRAKE"), BrakeCol, Modifier.weight(0.85f).fillMaxHeight()) { brakeDown = it }
+            Column(Modifier.weight(2.3f).fillMaxHeight()) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    val (txt, col) = when {
+                        tel == null -> tr("Connected · no dashboard data") to Accent
+                        stale -> tr("No telemetry from the game") to Accent
+                        else -> tr("Connected") to Gas
+                    }
+                    Text(
+                        txt, color = col, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { vm.update(settings.copy(steerMode = (settings.steerMode + 1) % 3)) }) {
+                        Text(tr(STEER_MODES[settings.steerMode]))
+                    }
+                    if (settings.steerMode == 0) {
+                        TextButton(onClick = { trim = tilt.angleDeg }) { Text(tr("Center")) }
+                    }
+                    TextButton(onClick = { dashToggle = true }) { Text(tr("Dash")) }
+                    TextButton(onClick = { showSettings = true }) { Text(tr("Settings")) }
+                    TextButton(onClick = { link.disconnect() }) { Text(tr("Exit"), color = BrakeCol) }
+                }
+                if (tel == null) {
+                    Text(noDataHint(rxInfo), color = Dim, fontSize = 11.sp)
+                }
+                Row(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Wheel(angle = wheelDeg, modifier = Modifier.size(wheelSize).then(wheelTouch))
+                    Dashboard(tel, settings.dashStyle, settings.mph, Modifier.weight(1f).fillMaxHeight().then(dashTap))
+                }
+                if (settings.steerMode == 2) {
+                    Row(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        HoldButton("◀", Modifier.weight(1f).fillMaxHeight()) { arrowL = it }
+                        HoldButton("▶", Modifier.weight(1f).fillMaxHeight()) { arrowR = it }
+                    }
+                }
+            }
+            Pedal(tr("GAS"), Gas, Modifier.weight(0.85f).fillMaxHeight()) { gasDown = it }
         }
     }
 
     if (showSettings) {
         SettingsDialog(settings, vm::update) { showSettings = false }
+    }
+}
+
+@Composable
+private fun Pedal(label: String, color: Color, modifier: Modifier, onDown: (Boolean) -> Unit) {
+    var down by remember { mutableStateOf(false) }
+    val cb by rememberUpdatedState(onDown)
+    val shape = RoundedCornerShape(28.dp)
+    Box(
+        modifier
+            .clip(shape)
+            .background(if (down) color.copy(alpha = 0.28f) else Panel)
+            .border(2.dp, if (down) color else Line, shape)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val d = awaitFirstDown()
+                    down = true
+                    cb(true)
+                    var tracking = true
+                    while (tracking) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull { it.id == d.id }
+                        if (ch == null || !ch.pressed) tracking = false else ch.consume()
+                    }
+                    down = false
+                    cb(false)
+                }
+            },
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val n = 9
+            for (i in 1 until n) {
+                val y = size.height * i / n
+                drawLine(Color(0x22FFFFFF), Offset(size.width * 0.15f, y), Offset(size.width * 0.85f, y), strokeWidth = 4f)
+            }
+        }
+        Text(
+            label, color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+            letterSpacing = 3.sp, modifier = Modifier.padding(bottom = 16.dp),
+        )
     }
 }
 
@@ -396,61 +496,6 @@ private fun HoldButton(label: String, modifier: Modifier, onHold: (Boolean) -> U
 }
 
 @Composable
-private fun Hud(t: Telemetry?, mph: Boolean) {
-    var peak by remember { mutableFloatStateOf(3000f) }
-    if (t != null) peak = max(peak, t.rpm)
-    val maxRpm = if (peak <= 1.5f) 1f else max(peak, 3000f) * 1.08f
-    val rpmFrac = ((t?.rpm ?: 0f) / maxRpm).coerceIn(0f, 1f)
-
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                (t?.speed(mph) ?: 0f).roundToInt().toString(),
-                fontSize = 64.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace,
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(if (mph) "mph" else "km/h", color = Dim, modifier = Modifier.padding(bottom = 12.dp))
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)).border(2.dp, Accent, RoundedCornerShape(10.dp)),
-                contentAlignment = Alignment.Center,
-            ) { Text(t?.gearLabel ?: "N", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Accent) }
-            Spacer(Modifier.width(12.dp))
-            Canvas(Modifier.width(150.dp).height(12.dp)) {
-                drawRoundRect(Line, size = size, cornerRadius = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()))
-                val col = when { rpmFrac > 0.9f -> BrakeCol; rpmFrac > 0.75f -> Accent; else -> Gas }
-                drawRoundRect(col, size = Size(size.width * rpmFrac, size.height),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()))
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Lamp("◀", t?.lamp(Lights.SIGNAL_L) == true, Gas)
-            Lamp("▶", t?.lamp(Lights.SIGNAL_R) == true, Gas)
-            Lamp("HI", t?.lamp(Lights.FULLBEAM) == true, Color(0xFF4DA3FF))
-            Lamp("ABS", t?.lamp(Lights.ABS) == true, Accent)
-            Lamp("TC", t?.lamp(Lights.TC) == true, Accent)
-            Lamp("P", t?.lamp(Lights.HANDBRAKE) == true, BrakeCol)
-            Lamp("OIL", t?.lamp(Lights.OIL) == true, BrakeCol)
-            Lamp("BAT", t?.lamp(Lights.BATTERY) == true, BrakeCol)
-        }
-        if (t != null) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Fuel ${(t.fuel * 100).roundToInt()}%   Temp ${t.engTemp.roundToInt()}°C   Gas in game ${(t.throttle * 100).roundToInt()}%",
-                color = Dim, fontSize = 12.sp,
-            )
-        }
-    }
-}
-
-@Composable
-private fun Lamp(text: String, on: Boolean, color: Color) {
-    Text(text, color = if (on) color else Color(0xFF2A3547), fontWeight = FontWeight.Bold, fontSize = 15.sp)
-}
-
-@Composable
 fun Wheel(angle: Float, modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val c = center
@@ -465,109 +510,180 @@ fun Wheel(angle: Float, modifier: Modifier = Modifier) {
     }
 }
 
-@Composable
-private fun Pedal(
-    label: String, color: Color, analog: Boolean, haptics: Boolean,
-    modifier: Modifier, onValue: (Float) -> Unit,
-) {
-    var value by remember { mutableFloatStateOf(0f) }
-    val haptic = LocalHapticFeedback.current
-    val update by rememberUpdatedState(onValue)
-    val hapticsOn by rememberUpdatedState(haptics)
-    val shape = RoundedCornerShape(28.dp)
+// ───────────────────────────── Settings (BeamNG style) ─────────────────────────────
 
-    Box(
-        modifier
-            .clip(shape)
-            .background(Panel)
-            .border(2.dp, if (value > 0f) color else Line, shape)
-            .pointerInput(analog) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    fun valueAt(y: Float) = if (analog) (1f - y / size.height).coerceIn(0.1f, 1f) else 1f
-                    value = valueAt(down.position.y)
-                    update(value)
-                    if (hapticsOn) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    var tracking = true
-                    while (tracking) {
-                        val ev = awaitPointerEvent()
-                        val ch = ev.changes.firstOrNull { it.id == down.id }
-                        if (ch == null || !ch.pressed) {
-                            tracking = false
-                        } else {
-                            value = valueAt(ch.position.y)
-                            update(value)
-                            ch.consume()
+private val SideBg = Color(0xFF0E1013)
+private val SectionBg = Color(0xFF1D2128)
+private val RowBg = Color(0xFF282D37)
+
+/** Closes only with the Done button: no dismiss on outside tap or Back. */
+@Composable
+private fun SettingsDialog(s: Settings, onChange: (Settings) -> Unit, onClose: () -> Unit) {
+    var page by remember { mutableIntStateOf(0) }
+    val pages = listOf("Steering", "Dashboard", "Language", "About")
+
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
+        ),
+    ) {
+        Surface(
+            Modifier.fillMaxSize().padding(10.dp),
+            shape = RoundedCornerShape(10.dp),
+            color = Color(0xF2121519),
+            contentColor = Color.White,
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.clip(RoundedCornerShape(6.dp)).background(Accent)
+                            .clickable(onClick = onClose).padding(horizontal = 16.dp, vertical = 8.dp),
+                    ) { Text(tr("‹ Done"), color = Color.Black, fontWeight = FontWeight.Black, fontSize = 15.sp) }
+                    Spacer(Modifier.width(16.dp))
+                    Canvas(Modifier.size(16.dp, 32.dp)) {
+                        val path = Path().apply {
+                            moveTo(size.width * 0.45f, 0f); lineTo(size.width, 0f)
+                            lineTo(size.width * 0.55f, size.height); lineTo(0f, size.height); close()
+                        }
+                        drawPath(path, Accent)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(tr("Settings"), fontSize = 26.sp, fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic)
+                }
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    Column(Modifier.width(170.dp).fillMaxHeight().background(SideBg)) {
+                        pages.forEachIndexed { i, name ->
+                            val sel = i == page
+                            Box(
+                                Modifier.fillMaxWidth()
+                                    .background(if (sel) Accent else Color.Transparent)
+                                    .clickable { page = i }
+                                    .padding(horizontal = 16.dp, vertical = 13.dp),
+                            ) {
+                                Text(tr(name), fontSize = 15.sp, color = Color.White,
+                                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal)
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        Text("TiltDrive v0.2", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(16.dp))
+                    }
+                    Column(
+                        Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(12.dp),
+                    ) {
+                        when (page) {
+                            0 -> {
+                                Section(tr("Control")) {
+                                    SegmentRow(tr("Steering control"), STEER_MODES.map { tr(it) }, s.steerMode) { onChange(s.copy(steerMode = it)) }
+                                    ToggleRow(tr("Reverse steering"), s.invert) { onChange(s.copy(invert = it)) }
+                                }
+                                Section(tr("Sensitivity")) {
+                                    SliderRow(tr("Steering range"), "${s.range.roundToInt()}°", s.range, 30f..120f) { onChange(s.copy(range = it)) }
+                                    SliderRow(tr("Dead zone (tilt)"), "${s.deadzone.roundToInt()}%", s.deadzone, 0f..15f) { onChange(s.copy(deadzone = it)) }
+                                    SliderRow(tr("Smoothing (tilt)"), "${s.smoothing.roundToInt()}%", s.smoothing, 0f..90f) { onChange(s.copy(smoothing = it)) }
+                                }
+                            }
+                            1 -> {
+                                Section(tr("Dashboard style")) {
+                                    SegmentRow(tr("Style"), DASH_STYLES.map { tr(it) }, s.dashStyle) { onChange(s.copy(dashStyle = it)) }
+                                    Text(tr("Tap the dashboard while driving to switch the style"), color = Dim, fontSize = 12.sp,
+                                        modifier = Modifier.padding(top = 4.dp, start = 4.dp))
+                                }
+                                Section(tr("Units")) {
+                                    ToggleRow(tr("Speed in mph"), s.mph) { onChange(s.copy(mph = it)) }
+                                }
+                            }
+                            2 -> Section(tr("Language")) {
+                                LangChips(s.lang, Modifier.padding(4.dp)) { onChange(s.copy(lang = it)) }
+                            }
+                            else -> Section(tr("About")) {
+                                Text(
+                                    tr("Unofficial app, not affiliated with BeamNG. Protocol info from github.com/BeamNG/remotecontrol (ISC license, © 2014 BeamNG)."),
+                                    color = Dim, fontSize = 13.sp,
+                                )
+                            }
                         }
                     }
-                    value = 0f
-                    update(0f)
                 }
-            },
-        contentAlignment = Alignment.BottomCenter,
-    ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val h = size.height * value
-            drawRect(color.copy(alpha = 0.35f), topLeft = Offset(0f, size.height - h), size = Size(size.width, h))
-            val n = 9
-            for (i in 1 until n) {
-                val y = size.height * i / n
-                drawLine(Color(0x22FFFFFF), Offset(size.width * 0.15f, y), Offset(size.width * 0.85f, y), strokeWidth = 4f)
             }
         }
-        Text(
-            label, color = color, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-            letterSpacing = 3.sp, modifier = Modifier.padding(bottom = 16.dp),
-        )
     }
 }
 
-// ───────────────────────────── Settings ─────────────────────────────
+@Composable
+private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(bottom = 10.dp)
+            .clip(RoundedCornerShape(8.dp)).background(SectionBg).padding(10.dp),
+    ) {
+        Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(bottom = 6.dp))
+        content()
+    }
+}
 
 @Composable
-private fun SettingsDialog(s: Settings, onChange: (Settings) -> Unit, onClose: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onClose,
-        confirmButton = { TextButton(onClick = onClose) { Text("Done") } },
-        title = { Text("Settings") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text("Steering control", fontSize = 14.sp)
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    STEER_MODES.forEachIndexed { i, name ->
-                        if (s.steerMode == i) Button(onClick = { onChange(s.copy(steerMode = i)) }) { Text(name) }
-                        else OutlinedButton(onClick = { onChange(s.copy(steerMode = i)) }) { Text(name) }
-                    }
-                }
-                Text("Steering range: ${s.range.roundToInt()}°", fontSize = 14.sp)
-                Slider(s.range, { onChange(s.copy(range = it)) }, valueRange = 30f..120f)
-                Text("Dead zone: ${s.deadzone.roundToInt()}%", fontSize = 14.sp)
-                Slider(s.deadzone, { onChange(s.copy(deadzone = it)) }, valueRange = 0f..15f)
-                Text("Tilt smoothing: ${s.smoothing.roundToInt()}%", fontSize = 14.sp)
-                Slider(s.smoothing, { onChange(s.copy(smoothing = it)) }, valueRange = 0f..90f)
-                Text("Gas limit: ${s.gasLimit.roundToInt()}%", fontSize = 14.sp)
-                Slider(s.gasLimit, { onChange(s.copy(gasLimit = it)) }, valueRange = 10f..100f)
-                Text("Gas ramp-up: ${if (s.gasRampMs < 50f) "instant" else "${s.gasRampMs.roundToInt()} ms"}", fontSize = 14.sp)
-                Slider(s.gasRampMs, { onChange(s.copy(gasRampMs = it)) }, valueRange = 0f..2000f)
-                SwitchRow("Reverse steering", s.invert) { onChange(s.copy(invert = it)) }
-                SwitchRow("Analog pedals (slide to modulate)", s.analog) { onChange(s.copy(analog = it)) }
-                SwitchRow("Vibration", s.haptics) { onChange(s.copy(haptics = it)) }
-                SwitchRow("Speed in mph", s.mph) { onChange(s.copy(mph = it)) }
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Unofficial app, not affiliated with BeamNG. Protocol info from " +
-                        "github.com/BeamNG/remotecontrol (ISC license, © 2014 BeamNG).",
-                    color = Dim, fontSize = 11.sp,
-                )
-            }
-        },
+private fun RowBox(content: @Composable RowScope.() -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp)
+            .clip(RoundedCornerShape(6.dp)).background(RowBg)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content,
     )
 }
 
 @Composable
-private fun SwitchRow(label: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ToggleRow(label: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
+    RowBox {
         Text(label, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        Switch(checked, onChecked)
+        Switch(
+            checked, onChecked,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = Accent, checkedThumbColor = Color.White, checkedBorderColor = Color.Transparent,
+                uncheckedTrackColor = Color(0xFF3A404C), uncheckedThumbColor = Color(0xFFB8C0CC),
+                uncheckedBorderColor = Color.Transparent,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun SliderRow(
+    label: String, valueText: String, value: Float,
+    range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp)
+            .clip(RoundedCornerShape(6.dp)).background(RowBg)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text(valueText, color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        }
+        Slider(value, onChange, valueRange = range)
+    }
+}
+
+@Composable
+private fun SegmentRow(label: String, options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    RowBox {
+        Text(label, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        Row(Modifier.clip(RoundedCornerShape(6.dp)).background(Color(0xFF14171C))) {
+            options.forEachIndexed { i, name ->
+                val sel = i == selected
+                Box(
+                    Modifier.clip(RoundedCornerShape(6.dp))
+                        .background(if (sel) Accent else Color.Transparent)
+                        .clickable { onSelect(i) }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Text(name, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                        color = if (sel) Color.Black else Color(0xFFC5CEDB))
+                }
+            }
+        }
     }
 }
